@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -115,7 +116,7 @@ func (b *conditionalBackend) lastRequestIMS() string {
 // newGateway instantiates a Gateway and starts it behind httptest.
 func newGateway(t *testing.T, cfg Config) *httptest.Server {
 	t.Helper()
-	gw := New(cfg, http.DefaultClient)
+	gw := New(cfg, http.DefaultClient, slog.New(slog.DiscardHandler))
 	srv := httptest.NewServer(gw)
 	t.Cleanup(srv.Close)
 	return srv

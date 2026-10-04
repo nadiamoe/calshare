@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"sync"
@@ -34,11 +34,12 @@ type Gateway struct {
 	client *http.Client
 	mux    *http.ServeMux
 	cache  calendarCache
+	logger *slog.Logger
 }
 
 // New builds a Gateway. client is used for all backend requests.
-func New(cfg Config, client *http.Client) *Gateway {
-	g := &Gateway{cfg: cfg, client: client, mux: http.NewServeMux()}
+func New(cfg Config, client *http.Client, logger *slog.Logger) *Gateway {
+	g := &Gateway{cfg: cfg, client: client, mux: http.NewServeMux(), logger: logger}
 	g.mux.HandleFunc("/health", g.handleHealth)
 	g.mux.HandleFunc("/ready", g.handleReady)
 	g.mux.HandleFunc(g.cfg.SecretPath, g.handleCalendar)
@@ -104,13 +105,16 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) handleReady(w http.ResponseWriter, r *http.Request) {
 	req, err := http.NewRequest(http.MethodGet, g.cfg.BackendURL, nil)
 	if err != nil {
+		g.logger.Error("readiness check: failed to build backend request", "error", err)
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
 	req.SetBasicAuth(g.cfg.BackendUser, g.cfg.BackendPass)
 
+	g.logger.Info("readiness check: requesting backend")
 	resp, err := g.client.Do(req)
 	if err != nil {
+		g.logger.Error("readiness check: backend unreachable", "error", err)
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
@@ -120,6 +124,7 @@ func (g *Gateway) handleReady(w http.ResponseWriter, r *http.Request) {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		w.WriteHeader(http.StatusOK)
 	} else {
+		g.logger.Error("readiness check: backend returned error status", "status", resp.StatusCode)
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
 }
@@ -134,6 +139,7 @@ func (g *Gateway) handleCalendar(w http.ResponseWriter, r *http.Request) {
 
 	req, err := http.NewRequest(http.MethodGet, g.cfg.BackendURL, nil)
 	if err != nil {
+		g.logger.Error("calendar request: failed to build backend request", "error", err)
 		closeIfPresent(cachedBody)
 		http.Error(w, "backend request failed", http.StatusBadGateway)
 		return
@@ -143,8 +149,10 @@ func (g *Gateway) handleCalendar(w http.ResponseWriter, r *http.Request) {
 		req.Header.Set("If-Modified-Since", cachedLastModified)
 	}
 
+	g.logger.Info("calendar request: requesting backend", "conditional", haveCached && cachedLastModified != "")
 	resp, err := g.client.Do(req)
 	if err != nil {
+		g.logger.Error("calendar request: backend unreachable", "error", err)
 		closeIfPresent(cachedBody)
 		http.Error(w, "backend unreachable", http.StatusBadGateway)
 		return
@@ -153,26 +161,30 @@ func (g *Gateway) handleCalendar(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case resp.StatusCode == http.StatusNotModified && haveCached:
+		g.logger.Info("calendar request: cache hit")
 		io.Copy(io.Discard, resp.Body)
 		defer cachedBody.Close()
 		w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
 		io.Copy(w, cachedBody)
 	case resp.StatusCode == http.StatusOK:
+		g.logger.Info("calendar request: cache miss")
 		closeIfPresent(cachedBody)
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
+			g.logger.Error("calendar request: failed to read backend response", "error", err)
 			http.Error(w, "backend error", http.StatusBadGateway)
 			return
 		}
 		filtered := filterICS(body, g.cfg.Allow, g.cfg.Deny)
 		if err := g.cache.set(resp.Header.Get("Last-Modified"), filtered); err != nil {
-			log.Printf("gateway: failed to cache calendar: %v", err)
+			g.logger.Error("calendar request: failed to cache calendar", "error", err)
 		}
 		w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
 		w.Write(filtered)
 	default:
 		closeIfPresent(cachedBody)
 		io.Copy(io.Discard, resp.Body)
+		g.logger.Error("calendar request: backend returned error status", "status", resp.StatusCode)
 		http.Error(w, "backend error", http.StatusBadGateway)
 	}
 }

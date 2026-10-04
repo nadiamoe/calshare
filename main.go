@@ -3,7 +3,7 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"regexp"
@@ -14,13 +14,19 @@ import (
 )
 
 func main() {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	slog.SetDefault(logger)
+
 	cfg, listenAddr := loadConfig()
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	gw := gateway.New(cfg, client)
+	gw := gateway.New(cfg, client, logger)
 
-	log.Printf("listening on %s", listenAddr)
-	log.Fatal(http.ListenAndServe(listenAddr, gw))
+	slog.Info("listening", "addr", listenAddr)
+	if err := http.ListenAndServe(listenAddr, gw); err != nil {
+		slog.Error("server exited", "error", err)
+		os.Exit(1)
+	}
 }
 
 func loadConfig() (gateway.Config, string) {
@@ -48,7 +54,8 @@ func loadConfig() (gateway.Config, string) {
 func mustEnv(name string) string {
 	v := os.Getenv(name)
 	if v == "" {
-		log.Fatalf("missing required env var %s", name)
+		slog.Error("missing required env var", "name", name)
+		os.Exit(1)
 	}
 	return v
 }
@@ -63,7 +70,8 @@ func envOr(name, fallback string) string {
 func compileEnvRegexp(name, pattern string) *regexp.Regexp {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		log.Fatalf("invalid regex in %s: %v", name, err)
+		slog.Error("invalid regex in env var", "name", name, "error", err)
+		os.Exit(1)
 	}
 	return re
 }
