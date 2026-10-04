@@ -175,7 +175,8 @@ func (g *Gateway) handleCalendar(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "backend error", http.StatusBadGateway)
 			return
 		}
-		filtered := filterICS(body, g.cfg.Allow, g.cfg.Deny)
+		filtered, discarded := filterICS(body, g.cfg.Allow, g.cfg.Deny)
+		g.logger.Info("calendar request: filtered events", "discarded", discarded)
 		if err := g.cache.set(resp.Header.Get("Last-Modified"), filtered); err != nil {
 			g.logger.Error("calendar request: failed to cache calendar", "error", err)
 		}
@@ -196,8 +197,9 @@ func closeIfPresent(c io.Closer) {
 }
 
 // filterICS keeps VEVENT blocks whose SUMMARY passes the allow/deny regexps,
-// leaving everything outside VEVENT blocks untouched.
-func filterICS(ics []byte, allow, deny *regexp.Regexp) []byte {
+// leaving everything outside VEVENT blocks untouched. discarded counts the
+// VEVENT blocks dropped by the allow/deny regexps.
+func filterICS(ics []byte, allow, deny *regexp.Regexp) (filtered []byte, discarded int) {
 	lines := unfoldLines(ics)
 
 	var out bytes.Buffer
@@ -218,6 +220,8 @@ func filterICS(ics []byte, allow, deny *regexp.Regexp) []byte {
 				out.Write(l)
 				out.WriteString("\r\n")
 			}
+		} else {
+			discarded++
 		}
 		event = nil
 	}
@@ -240,7 +244,7 @@ func filterICS(ics []byte, allow, deny *regexp.Regexp) []byte {
 		}
 	}
 
-	return out.Bytes()
+	return out.Bytes(), discarded
 }
 
 func eventSummary(event [][]byte) string {
