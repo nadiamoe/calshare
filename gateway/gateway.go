@@ -175,8 +175,7 @@ func (g *Gateway) handleCalendar(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "backend error", http.StatusBadGateway)
 			return
 		}
-		filtered, discarded := filterICS(body, g.cfg.Allow, g.cfg.Deny)
-		g.logger.Info("calendar request: filtered events", "discarded", discarded)
+		filtered := filterICS(body, g.cfg.Allow, g.cfg.Deny, g.logger)
 		if err := g.cache.set(resp.Header.Get("Last-Modified"), filtered); err != nil {
 			g.logger.Error("calendar request: failed to cache calendar", "error", err)
 		}
@@ -197,14 +196,14 @@ func closeIfPresent(c io.Closer) {
 }
 
 // filterICS keeps VEVENT blocks whose SUMMARY passes the allow/deny regexps,
-// leaving everything outside VEVENT blocks untouched. discarded counts the
-// VEVENT blocks dropped by the allow/deny regexps.
-func filterICS(ics []byte, allow, deny *regexp.Regexp) (filtered []byte, discarded int) {
+// leaving everything outside VEVENT blocks untouched.
+func filterICS(ics []byte, allow, deny *regexp.Regexp, logger *slog.Logger) []byte {
 	lines := unfoldLines(ics)
 
 	var out bytes.Buffer
 	var event [][]byte
 	inEvent := false
+	var discardedByAllow, discardedByDeny int
 
 	flushEvent := func() {
 		if len(event) == 0 {
@@ -212,16 +211,17 @@ func filterICS(ics []byte, allow, deny *regexp.Regexp) (filtered []byte, discard
 		}
 		summary := eventSummary(event)
 		keep := allow == nil || allow.MatchString(summary)
-		if keep && deny != nil && deny.MatchString(summary) {
+		if !keep {
+			discardedByAllow++
+		} else if deny != nil && deny.MatchString(summary) {
 			keep = false
+			discardedByDeny++
 		}
 		if keep {
 			for _, l := range event {
 				out.Write(l)
 				out.WriteString("\r\n")
 			}
-		} else {
-			discarded++
 		}
 		event = nil
 	}
@@ -244,7 +244,17 @@ func filterICS(ics []byte, allow, deny *regexp.Regexp) (filtered []byte, discard
 		}
 	}
 
-	return out.Bytes(), discarded
+	logger.Info("calendar filter: filtered events",
+		"allow", regexpString(allow), "discarded_by_allow", discardedByAllow,
+		"deny", regexpString(deny), "discarded_by_deny", discardedByDeny)
+	return out.Bytes()
+}
+
+func regexpString(re *regexp.Regexp) string {
+	if re == nil {
+		return ""
+	}
+	return re.String()
 }
 
 func eventSummary(event [][]byte) string {
