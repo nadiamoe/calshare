@@ -111,7 +111,6 @@ func (g *Gateway) handleReady(w http.ResponseWriter, r *http.Request) {
 	}
 	req.SetBasicAuth(g.cfg.BackendUser, g.cfg.BackendPass)
 
-	g.logger.Info("readiness check: requesting backend")
 	resp, err := g.client.Do(req)
 	if err != nil {
 		g.logger.Error("readiness check: backend unreachable", "error", err)
