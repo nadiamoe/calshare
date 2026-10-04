@@ -43,6 +43,7 @@ func loadConfig() (gateway.Config, string) {
 	if v := os.Getenv("DENYLIST"); v != "" {
 		cfg.Deny = compileEnvRegexp("DENYLIST", v)
 	}
+	cfg.Anonymize = os.Getenv("ANONYMIZE")
 
 	if !strings.HasPrefix(cfg.SecretPath, "/") {
 		cfg.SecretPath = "/" + cfg.SecretPath

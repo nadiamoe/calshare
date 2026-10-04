@@ -22,6 +22,7 @@ type Config struct {
 	BackendPass string
 	Allow       *regexp.Regexp
 	Deny        *regexp.Regexp
+	Anonymize   string
 }
 
 // Gateway serves a filtered calendar fetched from a CalDAV backend, plus
@@ -174,7 +175,7 @@ func (g *Gateway) handleCalendar(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "backend error", http.StatusBadGateway)
 			return
 		}
-		filtered := filterICS(body, g.cfg.Allow, g.cfg.Deny, g.logger)
+		filtered := filterICS(body, g.cfg.Allow, g.cfg.Deny, g.cfg.Anonymize, g.logger)
 		if err := g.cache.set(resp.Header.Get("Last-Modified"), filtered); err != nil {
 			g.logger.Error("calendar request: failed to cache calendar", "error", err)
 		}
@@ -195,8 +196,10 @@ func closeIfPresent(c io.Closer) {
 }
 
 // filterICS keeps VEVENT blocks whose SUMMARY passes the allow/deny regexps,
-// leaving everything outside VEVENT blocks untouched.
-func filterICS(ics []byte, allow, deny *regexp.Regexp, logger *slog.Logger) []byte {
+// leaving everything outside VEVENT blocks untouched. If anonymize is
+// non-empty, surviving events have their SUMMARY, DESCRIPTION, LOCATION,
+// ATTENDEE, and ORGANIZER values replaced with it, leaving timing untouched.
+func filterICS(ics []byte, allow, deny *regexp.Regexp, anonymize string, logger *slog.Logger) []byte {
 	lines := unfoldLines(ics)
 
 	var out bytes.Buffer
@@ -217,6 +220,9 @@ func filterICS(ics []byte, allow, deny *regexp.Regexp, logger *slog.Logger) []by
 			discardedByDeny++
 		}
 		if keep {
+			if anonymize != "" {
+				event = anonymizeEvent(event, anonymize)
+			}
 			for _, l := range event {
 				out.Write(l)
 				out.WriteString("\r\n")
@@ -258,7 +264,7 @@ func regexpString(re *regexp.Regexp) string {
 
 func eventSummary(event [][]byte) string {
 	for _, l := range event {
-		if bytes.HasPrefix(l, []byte("SUMMARY:")) || bytes.HasPrefix(l, []byte("SUMMARY;")) {
+		if hasPropertyPrefix(l, []byte("SUMMARY")) {
 			idx := bytes.IndexByte(l, ':')
 			if idx >= 0 {
 				return string(l[idx+1:])
@@ -266,6 +272,44 @@ func eventSummary(event [][]byte) string {
 		}
 	}
 	return ""
+}
+
+// anonymizedProperties get replaced wholesale by the anonymize string,
+// dropping any parameters (e.g. ATTENDEE;CN=...) that might also identify
+// someone.
+var anonymizedProperties = [][]byte{
+	[]byte("SUMMARY"), []byte("DESCRIPTION"), []byte("LOCATION"),
+	[]byte("ATTENDEE"), []byte("ORGANIZER"),
+}
+
+// anonymizeEvent replaces every non-empty anonymized property in event with
+// "NAME:replacement", leaving all other lines (including timing) untouched.
+func anonymizeEvent(event [][]byte, replacement string) [][]byte {
+	out := make([][]byte, len(event))
+	for i, l := range event {
+		out[i] = l
+		for _, prop := range anonymizedProperties {
+			if !hasPropertyPrefix(l, prop) {
+				continue
+			}
+			idx := bytes.IndexByte(l, ':')
+			if idx >= 0 && idx+1 < len(l) {
+				out[i] = append(append(append([]byte{}, prop...), ':'), replacement...)
+			}
+			break
+		}
+	}
+	return out
+}
+
+// hasPropertyPrefix reports whether line is the ICS property named name,
+// i.e. starts with name followed by ':' (no parameters) or ';' (parameters).
+func hasPropertyPrefix(line, name []byte) bool {
+	if !bytes.HasPrefix(line, name) {
+		return false
+	}
+	rest := line[len(name):]
+	return len(rest) > 0 && (rest[0] == ':' || rest[0] == ';')
 }
 
 // unfoldLines splits raw ICS text into logical lines, undoing RFC 5545

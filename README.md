@@ -2,7 +2,8 @@
 
 A tiny gateway that turns a private, password-protected CalDAV calendar into
 a read-only ICS feed behind one secret, sharable URL, optionally hiding
-specific events by regex before anyone sees them.
+specific events by regex and/or scrubbing event details before anyone sees
+them.
 
 Intended use: you've got a personal CalDAV calendar and want to share a
 filtered view of it (e.g. busy/free, or hiding anything tagged "private")
@@ -32,6 +33,7 @@ docker run -p 8080:8080 \
 | `BACKEND_PASS` | yes | Password for HTTP Basic auth against `BACKEND_URL`. |
 | `ALLOWLIST` | no | Regex tested against each event's `SUMMARY`. Only matching events are kept. Default: allow all. |
 | `DENYLIST` | no | Regex tested against each event's `SUMMARY`, applied after `ALLOWLIST`. Matching events are dropped. Default: deny none. |
+| `ANONYMIZE` | no | If set, replaces `SUMMARY`, `DESCRIPTION`, `LOCATION`, `ATTENDEE`, and `ORGANIZER` on every event that survives `ALLOWLIST`/`DENYLIST` with this string, dropping any parameters (e.g. `ATTENDEE;CN=...`) along with them. Timing (`DTSTART`, `DTEND`, etc.) and `UID` are left alone. Default: don't anonymize. |
 | `LISTEN_ADDR` | no | Address to listen on. Default `:8080`. |
 
 ### Endpoints

@@ -276,6 +276,63 @@ func TestCalendarDefaultsToAllowAllDenyNone(t *testing.T) {
 	}
 }
 
+func TestCalendarAnonymization(t *testing.T) {
+	t.Parallel()
+
+	const ics = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//Test//EN
+BEGIN:VEVENT
+UID:1@example.com
+DTSTART:20261010T100000Z
+DTEND:20261010T110000Z
+SUMMARY:Team Standup
+DESCRIPTION:Discuss sprint progress
+LOCATION:Room 42
+ORGANIZER;CN=Alice:mailto:alice@example.com
+ATTENDEE;CN=Bob:mailto:bob@example.com
+END:VEVENT
+END:VCALENDAR
+`
+	backend, fake := newConditionalBackend(t, "u", "p")
+	fake.setContent(ics, "")
+
+	cfg := Config{SecretPath: "/secret", BackendURL: backend.URL, BackendUser: "u", BackendPass: "p", Anonymize: "REDACTED"}
+	gw := newGateway(t, cfg)
+
+	resp, err := http.Get(gw.URL + "/secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(body)
+
+	for _, want := range []string{
+		"SUMMARY:REDACTED",
+		"DESCRIPTION:REDACTED",
+		"LOCATION:REDACTED",
+		"ORGANIZER:REDACTED",
+		"ATTENDEE:REDACTED",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in anonymized output, got:\n%s", want, got)
+		}
+	}
+	for _, mustKeep := range []string{"DTSTART:20261010T100000Z", "DTEND:20261010T110000Z", "UID:1@example.com"} {
+		if !strings.Contains(got, mustKeep) {
+			t.Errorf("expected timing/identity line %q to survive anonymization, got:\n%s", mustKeep, got)
+		}
+	}
+	if strings.Contains(got, "Alice") || strings.Contains(got, "Bob") || strings.Contains(got, "Room 42") {
+		t.Errorf("expected original details to be scrubbed, got:\n%s", got)
+	}
+}
+
 func TestCalendarServesFromCacheOn304(t *testing.T) {
 	t.Parallel()
 
