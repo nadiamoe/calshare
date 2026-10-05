@@ -251,7 +251,8 @@ func filterICS(ics []byte, allow, deny *regexp.Regexp, anonymize string, logger 
 
 	logger.Info("calendar filter: filtered events",
 		"allow", regexpString(allow), "discarded_by_allow", discardedByAllow,
-		"deny", regexpString(deny), "discarded_by_deny", discardedByDeny)
+		"deny", regexpString(deny), "discarded_by_deny", discardedByDeny,
+		"anonymize", anonymize)
 	return out.Bytes()
 }
 
